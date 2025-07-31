@@ -74,9 +74,12 @@ pub fn query(
 fn query_q_values(
     deps: Deps,
     car_id: u64,
-    state_hash: String,
+    state_hash: Option<String>,
 ) -> StdResult<[i32; 5]> {
-    let q_values = Q_TABLE.may_load(deps.storage, (car_id, state_hash))?.unwrap_or([0; 5]);
+    let q_values = match state_hash { 
+        Some(state_hash) => Q_TABLE.may_load(deps.storage, (car_id, state_hash))?.unwrap_or([0; 5]),
+        None => Q_TABLE.prefix(prefix.clone()).range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+    };
     Ok(q_values)
 } 
 
@@ -124,7 +127,7 @@ pub enum ExecuteMsg {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum QueryMsg {
-    GetQ { car_id: u64, state_hash: String },
+    GetQ { car_id: u64, state_hash: Option<String> },
     Metadata { car_id: u64 },
 }
 
