@@ -1,0 +1,40 @@
+The base game is going to contain: 
+- car creation and customization
+- training 
+- track leaderboards 
+- track creator (earnings in v2)
+- tournaments
+
+
+
+TODO:
+- I want to save Track rankings in the Track Manager state
+
+
+PvP:
+
+- Slipstream 
+-- With slipstreaming we can use "Spawn zones" (for the starting area) bc the boost creates fairness
+- Blocking mech  (car with higher Q-value on same blcok mvement wins, other doesnt move)
+- Shove mech (same tile collision but car with lower momentum gets knocked in the direction of movement)
+
+PvP Rewards:
+- blocking Rewards
+- positional advantage Rewards
+- boost tile landing
+
+
+
+(-) All starting tiles need the same distance from the finish (PvP) (Eh nvm we'll see if slipstream saves it)
+
+
+
+FUTURE:
+- Mazes? (recursive backtracking algo)
+- Flappy Bird
+- turnbased combat (earn skills/weapons to learn how to use) 
+-- (if not turn-based it can be simulatneous RPS)
+-- we will use a separate Q-table for new actions: https://chatgpt.com/g/g-688d48664ba88191ae3ac25f57d61714-q-racing/c/68913d39-a810-8326-a5f6-0e4455e7f25c
+- DeFi tamagachi
+
+- Ability to Simulate races across multiple msgs (Gas split for large sims)

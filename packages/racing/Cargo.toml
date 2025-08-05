@@ -1,0 +1,16 @@
+[package]
+name = "racing"
+version = "0.1.0"
+authors = ["Trix"]
+edition = "2018"
+
+[dependencies]
+prost = "0.11"
+uint = "0.8"
+cw-storage-plus = "0.13.2"
+schemars = "0.8.8"
+serde = { version = "1.0.137", default-features = false, features = ["derive"] }
+serde-json-wasm = { version = "1.0.0" }
+thiserror = { version = "1.0.31" }
+cosmwasm-schema = "1.1.0"
+cosmwasm-std = "1.1.0"
