@@ -63,7 +63,7 @@ vec![
 ---
 
 ## 🧪 Validation
-- The contract computes `distance_from_finish` for all tiles using `TileType::Finish`.
+- The contract computes `progress_towards_finish` for all tiles using `TileType::Finish`.
 - AI should ensure there are valid paths from start areas to finish.
 
 ---
