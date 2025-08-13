@@ -2,83 +2,54 @@
 
 // car_nft/src/msg.rs
 
-use cosmwasm_schema::{cw_serde, QueryResponses};
-use std::collections::HashMap;
+use cosmwasm_schema::cw_serde;
+use cosmwasm_schema::QueryResponses;
+use cosmwasm_std::Addr;
 
-use crate::types::{CarMetadata, QTableEntry};
+use crate::types::CarMetadata;
+use cosmwasm_std::Coin;
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub admin: String,
+    pub name: String,
+    pub symbol: String,
+    pub payment_options: Option<Vec<Coin>>,
 }
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    Mint {
-        owners: Vec<String>,
-        metadata: Option<CarMetadata>,
+    /// Forward all standard CW721 executes through this variant
+    Base(cw721_base::ExecuteMsg<Option<CarMetadata>, cosmwasm_std::Empty>),
+    /// Request the contract to mint a new NFT. The contract will mint by self-calling,
+    /// so only the contract (minter) can actually perform the mint.
+    MintCar {
+        owner: String,
+        token_uri: Option<String>,
+        extension: Option<CarMetadata>,
     },
-    UpdateOwner {
-        car_id: u128,
-        owners: Vec<String>,
-        is_add: bool,
+    /// Update configuration and optionally begin/complete two-step owner transfer
+    UpdateConfig {
+        payment_options: Option<Vec<Coin>>,
+        new_owner: Option<String>,
     },
-    UpdateCarMetadata {
-        car_id: u128,
-        metadata: CarMetadata,
+    /// Owner-only: update the custom decal SVG for a token
+    UpdateCustomDecal {
+        token_id: String,
+        svg: String,
     },
-    Transfer {
-        car_id: u128,
-        to: String,
-    }
 }
 
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    #[returns(Vec<GetCarInfoResponse>)]
-    GetCarInfo { 
-        car_id: Option<u128>,
-        start_after: Option<u128>,
-        limit: Option<u32>,
-    },
-    #[returns(OwnerOfResponse)]
-    OwnerOf { car_id: u128 },
-    #[returns(NftInfoResponse)]
-    NftInfo { car_id: u128 },
-    #[returns(GetQResponse)]
-    GetQ { car_id: String, state_hash: Option<String> },
-    #[returns(AllTokensResponse)]
-    AllTokens {},
-}
-
-#[cw_serde]
-pub struct GetCarInfoResponse {
-    pub car_id: String,
-    pub owners: Vec<String>,
-    pub metadata: Option<CarMetadata>,
+    #[returns(cosmwasm_std::Binary)]
+    Base(cw721_base::QueryMsg<cosmwasm_std::Empty>),
 }
 
 
+// Accepted payment options for mint and owner
 #[cw_serde]
-pub struct OwnerOfResponse {
-    pub owners: Vec<String>,
-}
-
-#[cw_serde]
-pub struct NftInfoResponse {
-    pub car_id: String,
-    pub owners: Vec<String>,
-    pub metadata: Option<CarMetadata>,
-}
-
-#[cw_serde]
-pub struct AllTokensResponse {
-    pub tokens: Vec<String>,
-}
-
-#[cw_serde]
-pub struct GetQResponse {
-    pub car_id: String,
-    pub q_values: Vec<QTableEntry>,
+pub struct Config {
+    pub owner: Addr,
+    pub payment_options: Vec<Coin>,
 }

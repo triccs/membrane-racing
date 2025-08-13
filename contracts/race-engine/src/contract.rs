@@ -3,19 +3,21 @@
 use std::collections::HashMap;
 
 use cosmwasm_std::{
-    entry_point, to_json_binary, Binary, CosmosMsg, Deps, DepsMut, Env, MessageInfo, QuerierWrapper, Response, StdResult, Storage, Uint128
+    entry_point, to_json_binary, Binary, CosmosMsg, Deps, DepsMut, Env, MessageInfo, QuerierWrapper, Response, StdResult, Storage, Uint128, from_json
 };
-use racing::track_manager::GetTrackResponse;
+use cw_storage_plus::Bound;
 
 use crate::error::ContractError;
-use crate::state::{add_recent_race, get_config, get_q_values, get_recent_races, set_config, set_q_values, CONFIG, MAX_TICKS, Q_TABLE};
-use racing::types::{ActionSelectionStrategy, QTableEntry, RewardNumbers, TrackTile};
-use racing::race_engine::{CarState, Config, ConfigResponse, ExecuteMsg, GetQResponse, InstantiateMsg, QueryMsg, RaceResult, RaceResultResponse, RaceState, RecentRacesResponse, TrainingConfig, DEFAULT_BOOST_SPEED, DEFAULT_SPEED};
+use crate::state::{CAR_TRACK_TRAINING_STATS, add_recent_race, get_config, get_q_values, get_recent_races, set_config, set_q_values, CONFIG, MAX_TICKS, Q_TABLE, update_solo_training_stats, update_pvp_training_stats, get_track_training_stats};
+use racing::types::{ActionSelectionStrategy, QTableEntry, RewardNumbers, Track, TrackTile};
+use racing::race_engine::{CarState, Config, ConfigResponse, ExecuteMsg, GetQResponse, GetTrackTrainingStatsResponse, InstantiateMsg, QueryMsg, RaceResult, RaceResultResponse, RaceState, RecentRacesResponse, TrainingConfig, DEFAULT_BOOST_SPEED, DEFAULT_SPEED};
 use racing::car::{ExecuteMsg as Car_ExecuteMsg, QueryMsg as Car_QueryMsg};
 // Race simulation constants
 const MAX_CARS: usize = 8;
 // const MAX_TRACK_SIZE: usize = 50;
 const MIN_CARS: usize = 1;
+
+const MAX_LIMIT: u32 = 32;
 
 // Action constants (4 possible actions: 0-3)
 const ACTION_UP: usize = 0;
@@ -96,7 +98,7 @@ fn make_action_strategy(
 }
 
 /// Query all Q-tables for a car upfront
-// fn query_full_q_tables(config: Config, querier: QuerierWrapper, car_id: &str) -> Result<GetQResponse, ContractError> {
+// fn query_full_q_tables(config: Config, querier: QuerierWrapper, car_id: u128) -> Result<GetQResponse, ContractError> {
 //     let q_tables: GetQResponse = querier.query_wasm_smart::<GetQResponse>(config.car_contract, &Car_QueryMsg::GetQ {
 //         car_id: car_id.to_string(),
 //         state_hash: None,
@@ -114,7 +116,7 @@ fn make_action_strategy(
 // }
 
 ///Get q-values for a specific state hash
-// fn get_q_values(q_tables: GetQResponse, state_hash: &str) -> Result<[i32; 4], ContractError> {
+// fn get_q_values(q_tables: GetQResponse, state_hash: u128) -> Result<[i32; 4], ContractError> {
 //      let q_values = q_tables.q_values.iter().find(|q| q.state_hash == state_hash);
 //     Ok(q_values.unwrap_or(&QTableEntry {
 //         state_hash: state_hash.to_string(),
@@ -123,7 +125,7 @@ fn make_action_strategy(
 // }
 
 /// Query Q-values from car contract
-// fn query_car_q_values(config: Config, querier: QuerierWrapper, car_id: &str, state_hash: &str) -> Result<[i32; 4], ContractError> {
+// fn query_car_q_values(config: Config, querier: QuerierWrapper, car_id: u128, state_hash: u128) -> Result<[i32; 4], ContractError> {
 //     let q_tables: GetQResponse = querier.query_wasm_smart::<GetQResponse>(config.car_contract, &Car_QueryMsg::GetQ {
 //         car_id: car_id.to_string(),
 //         state_hash: Some(state_hash.to_string()),
@@ -138,7 +140,7 @@ fn make_action_strategy(
 // }
 
 /// Parse through Vec to update Q-values in storage
-fn batch_update_car_q_values(storage: &mut dyn Storage, car_id: &str, state_updates: &Vec<QTableEntry>, msgs: &mut Vec<CosmosMsg>, config: &Config) -> Result<(), ContractError> {
+fn batch_update_car_q_values(storage: &mut dyn Storage, car_id: u128, state_updates: &Vec<QTableEntry>, msgs: &mut Vec<CosmosMsg>, config: &Config) -> Result<(), ContractError> {
    //For each QTableEntry, update the Q-values in storage
    for update in state_updates {
         set_q_values(storage, car_id, &update.state_hash, update.action_values)?;
@@ -217,7 +219,7 @@ fn apply_batched_q_updates(
     
     // Third pass: send all updated Q-values to car contract in a single batch
     let state_updates_vec: Vec<QTableEntry> = state_updates.into_values().collect();
-    batch_update_car_q_values(storage, &car.car_id, &state_updates_vec, &mut msgs, &config)?;
+    batch_update_car_q_values(storage, car.car_id, &state_updates_vec, &mut msgs, &config)?;
     
     Ok(())
 }
@@ -262,13 +264,13 @@ pub fn execute(
             execute_simulate_race(deps, _env, track_id, car_ids, train, training_config, reward_config)
         },
         ExecuteMsg::ResetQ { car_id } => {
-            execute_reset_q(deps.storage, &car_id.to_string())
+            execute_reset_q(deps.storage, car_id.into())
         },
     }
 }
 
 /// Reset the Q-table for a car
-fn execute_reset_q(storage: &mut dyn Storage, car_id: &str) -> Result<Response, ContractError> {
+fn execute_reset_q(storage: &mut dyn Storage, car_id: u128) -> Result<Response, ContractError> {
     let prefix = Q_TABLE.prefix(car_id);
     let range = prefix.range(storage, None, None, cosmwasm_std::Order::Ascending);
     let keys: Vec<[u8; 32]> = range.map(|item| {
@@ -300,7 +302,7 @@ pub fn execute_simulate_race(
     deps: DepsMut,
     env: Env,
     track_id: Uint128,
-    car_ids: Vec<String>,
+    car_ids: Vec<u128>,
     train: bool,
     training_config: Option<TrainingConfig>,
     reward_config: Option<RewardNumbers>,
@@ -342,7 +344,9 @@ pub fn execute_simulate_race(
     };
 
     // Load track from track manager contract
-    let track_layout = load_track_from_manager(deps.as_ref(), config.clone(), track_id.clone())?;
+    let track = load_track_from_manager(deps.as_ref(), config.clone(), track_id.clone())?;
+    let track_layout = track.layout;
+    let fastest_track_tick_time = track.fastest_tick_time;
 
     //Find the indices of any starting tiles
     let start_indices = find_start_indices(&track_layout);
@@ -407,14 +411,36 @@ pub fn execute_simulate_race(
     };
 
     // Save race result
-    add_recent_race(deps.storage, race_result_struct.clone(), None, Some(track_id.to_string()))?;
+    add_recent_race(deps.storage, race_result_struct.clone(), None, Some(track_id.into()))?;
     for car_id in car_ids.clone() {
         add_recent_race(deps.storage, race_result_struct.clone(), Some(car_id), None)?;
     }
 
     // **NEW**: Apply Q-learning updates directly to car model in storage
     if train {
-        apply_q_learning_updates(deps.storage, &race_state, &race_result, reward_config.clone(), config.clone(), deps.querier)?;
+        apply_q_learning_updates(
+            deps.storage, 
+            &race_state, 
+            &race_result, 
+            reward_config.clone(), 
+            config.clone(), 
+            deps.querier,
+            fastest_track_tick_time
+        )?;
+        
+        // **NEW**: Update training stats for each car
+        let is_solo = car_ids.len() == 1;
+        for car in &race_state.cars {
+            let won = race_result.winner_ids.contains(&car.car_id);
+            let completion_time = if car.finished { car.steps_taken } else { MAX_TICKS };
+            
+            // Update training stats
+            if is_solo {
+                update_solo_training_stats(deps.storage, car.car_id, track_id.into(), won, completion_time)?;
+            } else {
+                update_pvp_training_stats(deps.storage, car.car_id, track_id.into(), won, completion_time)?;
+            }
+        }
     }
 
     let mut response = Response::new()
@@ -429,15 +455,15 @@ pub fn execute_simulate_race(
 }
 
 /// Load track from track manager contract
-fn load_track_from_manager(deps: Deps, config: Config, track_id: Uint128) -> Result<Vec<Vec<racing::types::TrackTile>>, ContractError> {
+fn load_track_from_manager(deps: Deps, config: Config, track_id: Uint128) -> Result<Track, ContractError> {
     // For testing purposes, return a simple test track
     // In a real implementation, this would query the track manager contract
-    let track: GetTrackResponse = deps.querier.query_wasm_smart::<GetTrackResponse>(
+    let track: Track = deps.querier.query_wasm_smart::<Track>(
         config.track_contract, &racing::track_manager::QueryMsg::GetTrack {
         track_id: track_id,
     })?;
     
-    Ok(track.layout)
+    Ok(track)
 }
 
 /// Simulate the complete race
@@ -633,11 +659,14 @@ fn calculate_car_action(
     strategy: ActionSelectionStrategy,
     seed: u32, // required for deterministic randomness
 ) -> Result<usize, ContractError> {
+    //Set seed.
+    // - Allows for deterministic randomness for each car to be different
+    let seed = seed * car.car_id as u32;
     // Generate state hash for current position
     let state_hash = generate_state_hash(track_layout, x, y, car_speed, other_cars);
     
     // Get Q-values from storage
-    let q_values = if let Ok(stored_values) = Q_TABLE.load(storage, (car.car_id.as_str(), &state_hash)) {
+    let q_values = if let Ok(stored_values) = Q_TABLE.load(storage, (car.car_id, &state_hash)) {
         stored_values
     } 
     //If Q-table is not stored, check if it exists in car state
@@ -728,7 +757,7 @@ fn calculate_car_action(
 
 // /// Query Q-table from car contract
 // fn query_car_q_table(
-//     car_id: &str,
+//     car_id: u128,
 //     track_layout: &[Vec<racing::types::TrackTile>],
 //     x: i32,
 //     y: i32,
@@ -896,6 +925,9 @@ fn apply_tile_effects_to_car(
     new_y: i32,
     track_layout: &[Vec<racing::types::TrackTile>],
 ) -> Result<(), ContractError> {
+    //Increment steps taken
+    car.steps_taken += 1;
+
     // Check bounds before accessing tile
     let out_of_bounds = new_x < 0 || new_y < 0 || 
        new_x >= track_layout[0].len() as i32 || 
@@ -903,7 +935,6 @@ fn apply_tile_effects_to_car(
     
     if out_of_bounds {
         // Car is out of bounds, stay in current position
-        car.steps_taken += 1;
         return Ok(());
     }
     
@@ -920,28 +951,23 @@ fn apply_tile_effects_to_car(
         car.x = new_x;
         car.y = new_y;
         car.tile = tile.clone();
-        car.steps_taken += 1;
     } else if tile.properties.is_start {
         car.x = new_x;
         car.y = new_y;
         car.tile = tile.clone();
-        car.steps_taken += 1;
     } else if tile.properties.blocks_movement {
         // Wall - stay in place
-        car.steps_taken += 1;
     } else if tile.properties.skip_next_turn {
         // Sticky tile - move but skip next turn
         car.x = new_x;
         car.y = new_y;
         car.tile = tile.clone();
         car.stuck = true; // Will be reset next turn
-        car.steps_taken += 1;
     } else {
         // Normal movement
         car.x = new_x;
         car.y = new_y;
         car.tile = tile.clone();
-        car.steps_taken += 1;
     }
     
     // Apply damage/healing
@@ -975,7 +1001,7 @@ fn all_cars_finished(cars: &[CarState]) -> bool {
 }
 
 /// Calculate race results using progress_towards_finish from tile properties
-fn calculate_results(cars: &[CarState], track_layout: &[Vec<racing::types::TrackTile>]) -> (Vec<String>, Vec<racing::race_engine::Rank>, Vec<racing::race_engine::Step>) {
+fn calculate_results(cars: &[CarState], track_layout: &[Vec<racing::types::TrackTile>]) -> (Vec<u128>, Vec<racing::race_engine::Rank>, Vec<racing::race_engine::Step>) {
     let mut finished_cars: Vec<_> = cars.iter()
         .filter(|car| car.finished)
         .collect();
@@ -1119,11 +1145,11 @@ fn create_test_track() -> Vec<Vec<racing::types::TrackTile>> {
 #[entry_point]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetRaceResult { race_id, track_id } => to_json_binary(&query_race_result(deps, race_id, track_id).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
+        QueryMsg::GetRaceResult { race_id, track_id } => to_json_binary(&query_race_result(deps, track_id, race_id).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
         QueryMsg::ListRecentRaces { car_id, track_id, start_after, limit } => to_json_binary(&query_recent_races(deps, car_id, track_id, start_after, limit).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
         QueryMsg::GetConfig {  } => to_json_binary(&CONFIG.load(deps.storage).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
         QueryMsg::GetQ { car_id, state_hash } => to_json_binary(&query_q_values(deps, car_id, state_hash).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
-
+        QueryMsg::GetTrackTrainingStats { car_id, track_id, start_after, limit } => to_json_binary(&query_track_training_stats(deps, car_id, track_id, start_after, limit).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
     }
 }
 
@@ -1132,7 +1158,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 
 pub fn query_q_values(
     deps: Deps,
-    car_id: String,
+    car_id: u128,
     state_hash: Option<[u8; 32]>,
 ) -> Result<GetQResponse, ContractError> {
     // Check if car exists
@@ -1141,7 +1167,7 @@ pub fn query_q_values(
     let q_values = match state_hash {
         Some(hash) => {
             // Return single Q-table entry
-            let action_values = get_q_values(deps.storage, &car_id, &hash).unwrap_or([0; 4]);
+            let action_values = get_q_values(deps.storage, car_id, &hash).unwrap_or([0; 4]);
             vec![QTableEntry {
                 state_hash: hash,
                 action_values,
@@ -1150,7 +1176,7 @@ pub fn query_q_values(
         None => {
             // Return all Q-table entries for this car
             let mut entries = vec![];
-            let range = Q_TABLE.prefix(&car_id).range(deps.storage, None, None, cosmwasm_std::Order::Ascending);
+            let range = Q_TABLE.prefix(car_id).range(deps.storage, None, None, cosmwasm_std::Order::Ascending);
             for item in range {
                 let (state_hash, action_values) = item.map_err(|e| ContractError::Std(e))?;
                 entries.push(QTableEntry {
@@ -1171,7 +1197,7 @@ pub fn query_q_values(
 
 pub fn query_race_result(
     deps: Deps,
-    track_id: String,
+    track_id: u128,
     race_id: String,
 ) -> Result<RaceResultResponse, ContractError> {
     let races = get_recent_races(deps.storage, None, Some(track_id))?;
@@ -1195,9 +1221,9 @@ pub fn query_race_result(
 
 pub fn query_recent_races(
     deps: Deps,
-    car_id: Option<String>,
-    track_id: Option<String>,
-    start_after: Option<String>,
+    car_id: Option<u128>,
+    track_id: Option<u128>,
+    start_after: Option<u128>,
     limit: Option<u32>,
 ) -> Result<RecentRacesResponse, ContractError> {
     let races = get_recent_races(deps.storage, car_id, track_id)?;
@@ -1211,6 +1237,64 @@ pub fn query_recent_races(
         steps_taken: r.steps_taken.clone(),
     }).collect();
     Ok(RecentRacesResponse { races: msg_races })
+}
+
+pub fn query_track_training_stats(
+    deps: Deps,
+    car_id: u128,
+    track_id: Option<u128>,
+    start_after: Option<u128>,
+    limit: Option<u32>,
+) -> Result<Vec<GetTrackTrainingStatsResponse>, ContractError> {
+    match track_id {
+        Some(track_id_str) => {
+            // Single track query - return just this track's stats
+            let stats = get_track_training_stats(deps.storage, car_id, track_id_str)
+                .unwrap_or_else(|_| racing::types::TrackTrainingStats {
+                    solo: racing::types::TrainingStats {
+                        tally: 0,
+                        win_rate: 0,
+                        fastest: u32::MAX,
+                    },
+                    pvp: racing::types::TrainingStats {
+                        tally: 0,
+                        win_rate: 0,
+                        fastest: u32::MAX,
+                    },
+                });
+            
+            Ok(vec![GetTrackTrainingStatsResponse {
+                car_id,
+                track_id: track_id_str,
+                stats,
+            }])
+        }
+        None => {
+            // Multiple tracks query - return all tracks for this car
+            let limit = limit.unwrap_or(MAX_LIMIT); // Default limit
+            let start_after = if let Some(start_after) = start_after.clone(){
+                Some(Bound::exclusive(start_after))
+            } else {
+                None
+            };
+            // Range through all track training stats for this car
+            let res = CAR_TRACK_TRAINING_STATS
+                .prefix(car_id)
+                .range(deps.storage, start_after, None, cosmwasm_std::Order::Ascending)
+                .take(limit as usize)
+                .map(|item| {
+                let (track_id, stats) = item.unwrap();
+                
+                    GetTrackTrainingStatsResponse {
+                        car_id: car_id.clone(),
+                        track_id,
+                        stats,
+                    }}).collect();
+
+            Ok(res)
+            
+        }
+    }
 }
 
 // (Can we add actions later? Can we make the actions more abstract to keep the Q-Table simpler? 
@@ -1230,10 +1314,11 @@ fn apply_q_learning_updates(
     reward_config: RewardNumbers,
     config: Config,
     querier: QuerierWrapper,
+    fastest_track_tick_time: u64,
 ) -> Result<(), ContractError> {
     
     // Collect all Q-updates for each car
-    let mut car_updates: std::collections::HashMap<String, Vec<( [u8; 32], u8, i32, Option< [u8; 32]>)>> = std::collections::HashMap::new();
+    let mut car_updates: std::collections::HashMap<u128, Vec<( [u8; 32], u8, i32, Option< [u8; 32]>)>> = std::collections::HashMap::new();
     
     for car in &race_state.cars {
         let mut updates = vec![];
@@ -1253,6 +1338,7 @@ fn apply_q_learning_updates(
                 i,
                 car.action_history.len(),
                 reward_config.clone(),
+                fastest_track_tick_time,
             )?;
             
             // Determine next state hash (if not the last action)
@@ -1289,6 +1375,7 @@ fn calculate_action_reward(
     action_index: usize,
     total_actions: usize,
     reward_config: RewardNumbers,
+    fastest_track_tick_time: u64,
 ) -> Result<i32, ContractError> {
 
     let mut rank = 0;
@@ -1314,6 +1401,10 @@ fn calculate_action_reward(
             2 => reward_config.rank.third,
             _ => reward_config.rank.other,
         };
+
+        //Add reward for speed
+        let r_ticks = 100.0 * (fastest_track_tick_time as f32) / (total_actions as f32);
+        reward += r_ticks as i32;
     }
 
     // **NEW**: Use hit_wall field instead of checking tile type

@@ -1,34 +1,56 @@
 // car_nft/src/contract.rs
 
 use cosmwasm_std::{
-    entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128,
+    entry_point, to_json_binary, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response,
+    StdResult, Uint128, WasmMsg,
 };
-use cw_storage_plus::Bound;
-use racing::car::GetCarInfoResponse;
+use cw2::set_contract_version;
+use cw721_base::{Cw721Contract, ExecuteMsg as Cw721ExecuteMsg, InstantiateMsg as Cw721InstantiateMsg, MintMsg};
 
 use crate::error::CarError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{get_car_info, set_car_info, CarInfo, ADMIN, CAR_ID_COUNTER, CAR_INFO};
-use racing::types::{QTableEntry, CarMetadata};
+use crate::state::{CAR_ID_COUNTER, CONFIG, PENDING_OWNER};
+use racing::types::CarMetadata;
+use racing::car::Config;
+use racing::traits_engine::{default_rarity_table, generate_traits_with_rarity, traits_to_attributes};
+use racing::traits_engine::Decal;
 
-const MAX_LIMIT: u32 = 32;
+const CONTRACT_NAME: &str = "car_nft";
+const CONTRACT_VERSION: &str = "0.1.0";
+
+// Plug our extension into cw721-base
+pub type CarCw721<'a> = Cw721Contract<'a, Option<CarMetadata>, cosmwasm_std::Empty, cosmwasm_std::Empty, cosmwasm_std::Empty>;
 
 #[entry_point]
 pub fn instantiate(
-    deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, CarError> {
-    let admin = deps.api.addr_validate(&msg.admin)?;
-    ADMIN.save(deps.storage, &admin)?;
-    
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
     // Initialize car ID counter to 0
     CAR_ID_COUNTER.save(deps.storage, &Uint128::zero())?;
 
-    Ok(Response::new()
-        .add_attribute("method", "instantiate")
-        .add_attribute("admin", admin))
+    // Save owner and payment options
+    let owner = info.sender.clone();
+    let payment_options = msg.payment_options.unwrap_or_default();
+    CONFIG.save(deps.storage, &Config { owner: owner.clone(), payment_options })?;
+
+    // Set minter to this contract address so only self-calls can mint
+    let cw_msg = Cw721InstantiateMsg {
+        name: msg.name,
+        symbol: msg.symbol,
+        minter: env.contract.address.to_string(),
+    };
+
+    let contract: CarCw721 = Cw721Contract::default();
+    let resp = contract
+        .instantiate(deps, env.clone(), info, cw_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?;
+
+    Ok(resp.add_attribute("minter", env.contract.address))
 }
 
 #[entry_point]
@@ -39,244 +61,215 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, CarError> {
     match msg {
-        ExecuteMsg::Mint {
-            owners,
-            metadata,
-        } => execute_mint(deps, env, info, owners, metadata),
-        ExecuteMsg::UpdateOwner { car_id, owners, is_add } => {
-            execute_update_owner(deps, info, car_id, owners, is_add)
+        ExecuteMsg::Base(base) => {
+            let contract: CarCw721 = Cw721Contract::default();
+            contract
+                .execute(deps, env, info, base)
+                .map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))
+                .map_err(CarError::from)
         }
-        ExecuteMsg::UpdateCarMetadata { car_id, metadata } => {
-            execute_update_car_metadata(deps, info, car_id, metadata)
-        }
-        ExecuteMsg::Transfer { car_id, to } => execute_transfer(deps, info, car_id, to),
+        ExecuteMsg::MintCar { owner, token_uri, extension } => execute_mint_car(deps, env, info, owner, token_uri, extension),
+        ExecuteMsg::UpdateConfig { payment_options, new_owner } => execute_update_config(deps, info, payment_options, new_owner),
+        ExecuteMsg::UpdateCustomDecal { token_id, svg } => execute_update_custom_decal(deps, info, token_id, svg),
     }
 }
 
-pub fn execute_mint(
-    deps: DepsMut,
-    env: Env,
-    _info: MessageInfo,
-    owners: Vec<String>,
-    metadata: Option<CarMetadata>,
-) -> Result<Response, CarError> {
-    //Load Car ID 
-    let car_id = CAR_ID_COUNTER.load(deps.storage)?;
-    CAR_ID_COUNTER.save(deps.storage, &(car_id + Uint128::one()))?;
-
-
-    // Validate all owner addresses
-    let owner_addrs: Result<Vec<_>, _> = owners
-        .iter()
-        .map(|owner| deps.api.addr_validate(owner))
-        .collect();
-    let owner_addrs = owner_addrs?;
-    
-    let car_info = crate::state::CarInfo {
-        owners: owner_addrs,
-        metadata,
-        created_at: env.block.time.seconds(),
-    };
-
-    set_car_info(deps.storage, car_id.u128(), car_info)?;
-
-    Ok(Response::new()
-        .add_attribute("method", "mint")
-        .add_attribute("car_id", car_id.to_string())
-        .add_attribute("owners", owners.join(",")))
-}
-
-pub fn execute_update_owner(
-    deps: DepsMut,
+fn execute_update_config(
+    mut deps: DepsMut,
     info: MessageInfo,
-    car_id: u128,
-    new_owners: Vec<String>,
-    is_add: bool,
+    payment_options: Option<Vec<Coin>>,
+    new_owner: Option<String>,
 ) -> Result<Response, CarError> {
-    let mut car_info = get_car_info(deps.storage, car_id)?;
+    let mut config = CONFIG.load(deps.storage)?;
+    let current_owner = config.owner.clone();
+
+    if info.sender != current_owner {
+        // Sender is not the current owner: check pending owner
+        if let Ok(pending) = PENDING_OWNER.load(deps.storage){
+            if info.sender == pending {
+                // Promote pending owner to owner and clear pending
+                config.owner = pending.clone();
+                PENDING_OWNER.remove(deps.storage);
+            } else {
+                return Err(CarError::Unauthorized {});
+            }
+        } else {
+            return Err(CarError::Unauthorized {});
+        }
+    } 
     
-    // Check if sender is one of the current owners
-    if !car_info.owners.contains(&info.sender) {
-        return Err(CarError::Unauthorized {});
+    if let Some(new_owner_str) = new_owner {
+        // Current owner initiating transfer -> set pending
+        let new_addr = deps.api.addr_validate(&new_owner_str)?;
+        PENDING_OWNER.save(deps.storage, &new_addr)?;
     }
 
-    let new_owner_addrs: Result<Vec<_>, _> = new_owners
-        .iter()
-        .map(|owner| deps.api.addr_validate(owner))
-        .collect();
-    let new_owner_addrs = new_owner_addrs?;
+    // Update config
+    if let Some(payment_options) = payment_options {
+        config.payment_options = payment_options;
+    }
+    CONFIG.save(deps.storage, &config)?;
 
-    if is_add {
-        // Add new owners (avoid duplicates)
-        for owner in new_owner_addrs {
-            if !car_info.owners.contains(&owner) {
-                car_info.owners.push(owner);
+    Ok(Response::new().add_attribute("action", "update_config"))
+}
+
+fn execute_mint_car(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    owner: String,
+    token_uri: Option<String>,
+    mut extension: Option<CarMetadata>,
+) -> Result<Response, CarError> {
+    // Enforce payment: at least one of the configured options must be present in funds
+    let config = CONFIG.load(deps.storage)?;
+    if !config.payment_options.is_empty() {
+        let sent = &info.funds;
+        let mut ok = false;
+        for Coin { denom, amount } in config.payment_options.iter() {
+            if sent.iter().any(|c| c.denom == *denom && c.amount >= *amount) {
+                ok = true;
+                break;
             }
         }
-    } else {
-        // Remove owners
-        car_info.owners = car_info.owners.into_iter().filter(|owner| !new_owner_addrs.contains(owner)).collect();
-        if car_info.owners.is_empty() {
-            return Err(CarError::CarHasNoOwners { car_id });
+        if !ok {
+            return Err(CarError::Std(cosmwasm_std::StdError::generic_err("insufficient payment: must include at least one accepted option")));
         }
     }
 
-    set_car_info(deps.storage, car_id, car_info)?;
+    // Generate incremental token_id from CAR_ID_COUNTER
+    let next_id = CAR_ID_COUNTER.load(deps.storage)?;
+    let token_id = next_id.to_string();
+    CAR_ID_COUNTER.save(deps.storage, &(next_id + Uint128::one()))?;
+
+    // Populate car_id in metadata
+    if let Some(meta) = &mut extension {
+        meta.car_id = Some(token_id.clone());
+    } else {
+        extension = Some(CarMetadata {
+            name: String::new(),
+            image_data: None,
+            attributes: None,
+            car_id: Some(token_id.clone()),
+        });
+    }
+
+    // Build a deterministic seed from known data
+    fn mix64(mut x: u64) -> u64 {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51afd7ed558ccd);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+        x ^ (x >> 33)
+    }
+    fn hash_str(s: &str) -> u64 {
+        let mut h: u64 = 1469598103934665603; // FNV offset basis
+        for b in s.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        mix64(h)
+    }
+    let seed = mix64(env.block.height as u64)
+        ^ mix64(env.block.time.nanos())
+        ^ hash_str(&token_id)
+        ^ hash_str(&owner)
+        ^ hash_str(info.sender.as_str());
+
+    // Generate traits + rarity and append as metadata attributes
+    let table = default_rarity_table();
+    let (traits, breakdown) = generate_traits_with_rarity(seed, &table);
+    let mut to_add = traits_to_attributes(&traits, &breakdown);
+
+    if let Some(meta) = &mut extension {
+        let mut attrs = meta.attributes.take().unwrap_or_default();
+        attrs.append(&mut to_add);
+        meta.attributes = Some(attrs);
+    }
+
+    // Perform a self-call to cw721-base Mint
+    let self_mint = Cw721ExecuteMsg::<Option<CarMetadata>, cosmwasm_std::Empty>::Mint(MintMsg {
+        token_id,
+        owner,
+        token_uri,
+        extension,
+    });
+
+    let msg = WasmMsg::Execute {
+        contract_addr: env.contract.address.to_string(),
+        msg: to_json_binary(&self_mint)?,
+        funds: vec![],
+    };
 
     Ok(Response::new()
-        .add_attribute("method", "update_owner")
-        .add_attribute("car_id", car_id.to_string())
-        .add_attribute("is_add", is_add.to_string()))
+        .add_message(msg)
+        .add_attribute("action", "mint_car"))
 }
 
-pub fn execute_update_car_metadata(
-    deps: DepsMut,
+fn execute_update_custom_decal(
+    mut deps: DepsMut,
     info: MessageInfo,
-    car_id: u128,
-    metadata: CarMetadata,
+    token_id: String,
+    svg: String,
 ) -> Result<Response, CarError> {
-    let car_info = get_car_info(deps.storage, car_id)?;
-    
-    // Check if sender is one of the owners
-    if !car_info.owners.contains(&info.sender) {
+    // Only token owner may update
+    let contract: CarCw721 = Cw721Contract::default();
+    let token = contract.tokens.load(deps.storage, &token_id)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?;
+    if token.owner != info.sender {
         return Err(CarError::Unauthorized {});
     }
 
-    let mut updated_car_info = car_info;
-    updated_car_info.metadata = Some(metadata);
-    set_car_info(deps.storage, car_id, updated_car_info)?;
+    // Load current metadata (clone to avoid moving from token)
+    let mut ext = token.extension.clone().unwrap_or(CarMetadata {
+        name: String::new(),
+        image_data: None,
+        attributes: None,
+        car_id: Some(token_id.clone()),
+    });
 
-    Ok(Response::new()
-        .add_attribute("method", "update_car_metadata")
-        .add_attribute("car_id", car_id.to_string()))
-}
-
-pub fn execute_transfer(
-    deps: DepsMut,
-    info: MessageInfo,
-    car_id: u128,
-    to: String,
-) -> Result<Response, CarError> {
-    let car_info = get_car_info(deps.storage, car_id)?;
-    
-    // Check if sender is one of the owners
-    if !car_info.owners.contains(&info.sender) {
-        return Err(CarError::Unauthorized {});
+    // Ensure the car has a custom slot either set or empty
+    // We update the attributes list: find existing decal attribute and set to raw SVG
+    let mut has_decal_attr = false;
+    if let Some(attrs) = &mut ext.attributes {
+        for a in attrs.iter_mut() {
+            if a.trait_type == "decal" {
+                // Prevent editing preset decals
+                if a.value.starts_with("Preset::") {
+                    return Err(CarError::NotCustomDecal {});
+                }
+                has_decal_attr = true;
+                a.value = svg.clone();
+                break;
+            }
+        }
+        if !has_decal_attr {
+            attrs.push(racing::types::CarAttribute { trait_type: "decal".to_string(), value: svg.clone() });
+            has_decal_attr = true;
+        }
+    } else {
+        ext.attributes = Some(vec![racing::types::CarAttribute { trait_type: "decal".to_string(), value: svg.clone() }]);
+        has_decal_attr = true;
     }
 
-    let new_owner = deps.api.addr_validate(&to)?;
-    let mut updated_car_info = car_info;
-    updated_car_info.owners = vec![new_owner.clone()];
-    set_car_info(deps.storage, car_id, updated_car_info)?;
+    // Persist new metadata by updating token via cw721-base extension replace
+    let mut token_mut = token;
+    token_mut.extension = Some(ext);
+    contract.tokens.save(deps.storage, &token_id, &token_mut)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?;
 
     Ok(Response::new()
-        .add_attribute("method", "transfer")
-        .add_attribute("car_id", car_id.to_string())
-        .add_attribute("from", info.sender)
-        .add_attribute("to", new_owner))
+        .add_attribute("action", "update_custom_decal")
+        .add_attribute("token_id", token_id))
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCarInfo { car_id, start_after, limit } => to_json_binary(&query_car_info(deps, car_id, start_after, limit).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
-        QueryMsg::OwnerOf { car_id } => to_json_binary(&query_owner_of(deps, car_id).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
-        QueryMsg::NftInfo { car_id } => to_json_binary(&query_nft_info(deps, car_id).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
-        QueryMsg::GetQ { car_id, state_hash } => to_json_binary(&query_q_values(deps, car_id, state_hash).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
-        QueryMsg::AllTokens {} => to_json_binary(&query_all_tokens(deps).map_err(|e| cosmwasm_std::StdError::generic_err(e.to_string()))?),
-    }
-}
-
-pub fn query_car_info(deps: Deps, car_id: Option<u128>, start_after: Option<u128>, limit: Option<u32>) -> Result<Vec<GetCarInfoResponse>, CarError> {
-    if let Some(car_id) = car_id {
-        let car_info = get_car_info(deps.storage, car_id)?;
-        
-        Ok(vec![GetCarInfoResponse {
-            car_id: car_id.to_string(),
-            owners: car_info.owners.iter().map(|addr| addr.to_string()).collect(),
-            metadata: car_info.metadata,
-        }])
-    } else {
-        let mut cars = vec![];
-        
-        //Get limit
-        let limit = limit.unwrap_or(MAX_LIMIT) as usize;
-
-        //Get start
-        let start = if let Some(start) = start_after {
-            Some(Bound::exclusive(start))
-        } else {
-            None
-        };
-        let range = CAR_INFO
-            .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
-            .take(limit)
-            .collect::<Result<Vec<(u128, CarInfo)>, _>>()?;
-        for item in range {
-            let (car_id, car_info) = item;
-            cars.push(GetCarInfoResponse {
-                car_id: car_id.to_string(),
-                owners: car_info.owners.iter().map(|addr| addr.to_string()).collect(),
-                metadata: car_info.metadata,
-            });
+        QueryMsg::Base(q) => {
+            let contract: CarCw721 = Cw721Contract::default();
+            contract.query(deps, env, q)
         }
-
-        Ok(cars)
     }
-}
-
-pub fn query_owner_of(deps: Deps, car_id: u128) -> Result<crate::msg::OwnerOfResponse, CarError> {
-    let car_info = get_car_info(deps.storage, car_id)?;
-    
-    Ok(crate::msg::OwnerOfResponse {
-        owners: car_info.owners.iter().map(|addr| addr.to_string()).collect(),
-    })
-}
-
-pub fn query_nft_info(deps: Deps, car_id: u128) -> Result<crate::msg::NftInfoResponse, CarError> {
-    let car_info = get_car_info(deps.storage, car_id)?;
-    
-    Ok(crate::msg::NftInfoResponse {
-        car_id: car_id.to_string(),
-        owners: car_info.owners.iter().map(|addr| addr.to_string()).collect(),
-        metadata: car_info.metadata,
-    })
-}
-
-pub fn query_q_values(deps: Deps, car_id: String, state_hash: Option<String>) -> Result<crate::msg::GetQResponse, CarError> {
-    let car_id_u128 = car_id.parse::<u128>().map_err(|_| CarError::InvalidCarId { car_id: car_id.clone() })?;
-    
-    if let Some(state_hash) = state_hash {
-        // Query specific state
-        let q_values = crate::state::get_q_values(deps.storage, car_id_u128, &state_hash)
-            .unwrap_or([0, 0, 0, 0]);
-        
-        Ok(crate::msg::GetQResponse {
-            car_id,
-            q_values: vec![racing::types::QTableEntry {
-                state_hash,
-                action_values: q_values,
-            }],
-        })
-    } else {
-        // Query all states for this car
-        let q_values = crate::state::get_all_q_values_for_car(deps.storage, car_id_u128)?;
-        
-        Ok(crate::msg::GetQResponse {
-            car_id,
-            q_values,
-        })
-    }
-}
-
-pub fn query_all_tokens(deps: Deps) -> Result<crate::msg::AllTokensResponse, CarError> {
-    let mut tokens = vec![];
-    let range = CAR_INFO.range(deps.storage, None, None, cosmwasm_std::Order::Ascending);
-    for item in range {
-        let (car_id, _) = item?;
-        tokens.push(car_id.to_string());
-    }
-    
-    Ok(crate::msg::AllTokensResponse { tokens })
 }
 

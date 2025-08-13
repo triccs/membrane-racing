@@ -3,16 +3,24 @@ The base game is going to contain:
 - training 
 - track leaderboards 
 - track creator (earnings in v2)
-- tournaments
+- tournaments (v2)
 
-
-
+Token
+- Weekly maze tracks to earn TOKEN (mining)
+- ENERGY covers payments (CDT used for tournies, TOKEN burned)
+- All PvP training and tournament winnings r in CDT (Tournament)
+- PvP training cost gets split to other cars used in training (will have to mesh this with energy and may get removed)
+- Training in TAB? Helps distribution and could be added to their desktop
+------------------------------------------------------------------------------------------------------------------
 TODO:
 - I want to save Track rankings in the Track Manager state
+- Track a car's training per track_id {solo: tally, win_rate, fastest, pvp: tally, win_rate, fastest}
 
+- Solo ENERGY (Daily regen or pay for regen)
+- PvP ENERGY (No daily regen but starts at 100)
 
 PvP:
-
+- (RNG component for variance in simulations)
 - Slipstream 
 -- With slipstreaming we can use "Spawn zones" (for the starting area) bc the boost creates fairness
 - Blocking mech  (car with higher Q-value on same blcok mvement wins, other doesnt move)
@@ -23,11 +31,18 @@ PvP Rewards:
 - positional advantage Rewards
 - boost tile landing
 
-
-
 (-) All starting tiles need the same distance from the finish (PvP) (Eh nvm we'll see if slipstream saves it)
 
+Auto-Battling:
+- You can opt into tournaments and PvPs on any list of track_ids. Paid for tourney wins or PvP training use. Each tourney needs a new entry fee but players can toggle to purchase a new one with their unclaimed earnings.
 
+GAME:
+- Within the track selector, there will be an option to join the tournament. If the car has already bought a tourney voucher there is no entry fee. This allows tournaments to be autonomous as long as there are at least 8 cars opted-in.
+- Showcase top cars on leaderboards (gives space for cosmetic packs)
+- Swap to AI vision to show only the state the state hash can see
+
+IF THEY WANT TO SPECULATE, LET THEM:
+- betting on races & weekly mazes (?)
 
 FUTURE:
 - Mazes? (recursive backtracking algo)
@@ -35,6 +50,9 @@ FUTURE:
 - turnbased combat (earn skills/weapons to learn how to use) 
 -- (if not turn-based it can be simulatneous RPS)
 -- we will use a separate Q-table for new actions: https://chatgpt.com/g/g-688d48664ba88191ae3ac25f57d61714-q-racing/c/68913d39-a810-8326-a5f6-0e4455e7f25c
-- DeFi tamagachi
+- MINING or use completed mazes as mining
+- CTF
+
+ - DeFi tamagachi (this doesn't really use movement or combat tho so may be a separate Q-table)
 
 - Ability to Simulate races across multiple msgs (Gas split for large sims)

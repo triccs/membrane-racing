@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 
-use crate::types::{TrackTile, TrackInfo, TileProperties};
+use crate::types::{Track, TrackTile, TileProperties};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -21,7 +21,7 @@ pub enum ExecuteMsg {
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
-    #[returns(GetTrackResponse)]
+    #[returns(Track)]
     GetTrack { track_id: Uint128 },
     #[returns(ListTracksResponse)]
     ListTracks {
@@ -30,16 +30,12 @@ pub enum QueryMsg {
     },
 }
 
-#[cw_serde]
-pub struct GetTrackResponse {
-    pub track_id: u128,
-    pub name: String,
-    pub width: u8,
-    pub height: u8,
-    pub layout: Vec<Vec<TrackTile>>,
-}
+// #[cw_serde]
+// pub struct GetTrackResponse {
+//     pub track: Track,
+// }
 
 #[cw_serde]
 pub struct ListTracksResponse {
-    pub tracks: Vec<TrackInfo>,
+    pub tracks: Vec<Track>,
 } 

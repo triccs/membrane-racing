@@ -23,6 +23,9 @@ pub enum CarError {
 
     #[error("Q-table not found for car: {car_id} and state: {state_hash}")]
     QTableNotFound { car_id: u128, state_hash: String },
+
+    #[error("Decal is not custom and cannot be edited")]
+    NotCustomDecal {},
 }
 
 pub type CarResult<T> = Result<T, CarError>; 

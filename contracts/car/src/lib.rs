@@ -4,4 +4,5 @@ pub mod msg;
 pub mod state;
 
 #[cfg(test)]
+mod traits_engine_tests; 
 mod tests; 

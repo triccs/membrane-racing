@@ -8,3 +8,4 @@ pub mod car;
 pub mod track_manager;
 pub mod tournament;
 pub mod race_engine;
+pub mod traits_engine;

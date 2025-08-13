@@ -3,6 +3,5 @@ pub use racing::track_manager::{
     InstantiateMsg,
     ExecuteMsg,
     QueryMsg,
-    GetTrackResponse,
     ListTracksResponse,
 }; 

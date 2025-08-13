@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 
-use crate::types::{QTableEntry, RewardNumbers, Track, TrackTile};
+use crate::types::{QTableEntry, RewardNumbers, Track, TrackTile, TrackTrainingStats};
 
 pub const DEFAULT_SPEED: u8 = 1;
 pub const DEFAULT_BOOST_SPEED: u8 = 3;
@@ -19,7 +19,7 @@ pub struct InstantiateMsg {
 pub enum ExecuteMsg {
     SimulateRace {
         track_id: Uint128,
-        car_ids: Vec<String>,
+        car_ids: Vec<u128>,
         train: bool,
         training_config: Option<TrainingConfig>,
         reward_config: Option<RewardNumbers>,
@@ -36,7 +36,7 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     #[returns(RaceResultResponse)]
     GetRaceResult { 
-        track_id: String,
+        track_id: u128,
         race_id: String,
      },
     #[returns(RecentRacesResponse)]
@@ -44,18 +44,25 @@ pub enum QueryMsg {
         ///Must provide one of the following////
         //Filter by car id 
         /// - If provided, return races for that car
-        car_id: Option<String>,
+        car_id: Option<u128>,
         //Filter by track id
         /// - If provided, return races for that track
-        track_id: Option<String>,
+        track_id: Option<u128>,
         //Start after a specific race id
-        start_after: Option<String>,
+        start_after: Option<u128>,
         limit: Option<u32>,
     },
     #[returns(ConfigResponse)]
     GetConfig {},
     #[returns(GetQResponse)]
-    GetQ { car_id: String, state_hash: Option< [u8; 32]> },
+    GetQ { car_id: u128, state_hash: Option< [u8; 32]> },
+    #[returns(Vec<GetTrackTrainingStatsResponse>)]
+    GetTrackTrainingStats { 
+        car_id: u128, 
+        track_id: Option<u128>,
+        start_after: Option<u128>,
+        limit: Option<u32>,
+    },
 }
 
 #[cw_serde]
@@ -64,7 +71,7 @@ pub struct RaceResultResponse {
 }
 #[cw_serde]
 pub struct GetQResponse {
-    pub car_id: String,
+    pub car_id: u128,
     pub q_values: Vec<QTableEntry>,
 }
 
@@ -79,15 +86,22 @@ pub struct ConfigResponse {
 }
 
 #[cw_serde]
+pub struct GetTrackTrainingStatsResponse {
+    pub car_id: u128,
+    pub track_id: u128,
+    pub stats: TrackTrainingStats,
+}
+
+#[cw_serde]
 pub struct Rank {
-    pub car_id: String,
+    pub car_id: u128,
     pub rank: u32,
 }
 
 
 #[cw_serde]
 pub struct Position {
-    pub car_id: String,
+    pub car_id: u128,
     pub x: u32,
     pub y: u32,
 }
@@ -106,7 +120,7 @@ pub struct PlayByPlay {
 
 #[cw_serde]
 pub struct Step {
-    pub car_id: String,
+    pub car_id: u128,
     pub steps_taken: u32,
 }
 
@@ -114,10 +128,10 @@ pub struct Step {
 pub struct RaceResult {
     pub race_id: String,
     pub track_id: Uint128,
-    pub car_ids: Vec<String>,
-    pub winner_ids: Vec<String>,
+    pub car_ids: Vec<u128>,
+    pub winner_ids: Vec<u128>,
     pub rankings: Vec<Rank>,
-    pub play_by_play: HashMap<String, PlayByPlay>,
+    pub play_by_play: HashMap<u128, PlayByPlay>,
     pub steps_taken: Vec<Step>,
 }
 
@@ -125,7 +139,7 @@ pub struct RaceResult {
 
 #[cw_serde]
 pub struct CarState {
-    pub car_id: String,
+    pub car_id: u128,
     pub tile: TrackTile,
     pub x: i32,
     pub y: i32,
@@ -148,7 +162,7 @@ pub struct RaceState {
     pub cars: Vec<CarState>,
     pub track_layout: Vec<Vec<TrackTile>>,
     pub tick: u32,
-    pub play_by_play: std::collections::HashMap<String, PlayByPlay>,
+    pub play_by_play: std::collections::HashMap<u128, PlayByPlay>,
 }
 
 
