@@ -14,6 +14,13 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
+      # Refresh Cargo.lock on the host before running the optimizer (which uses --locked)
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate/refresh lockfile
+        run: cargo generate-lockfile
+
       - name: Pull CosmWasm optimizer image
         run: docker pull cosmwasm/workspace-optimizer:0.14.0
 
