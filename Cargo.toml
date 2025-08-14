@@ -13,6 +13,3 @@ opt-level = 'z'
 overflow-checks = true
 panic = 'abort'
 rpath = false
-
-[patch.crates-io]
-base64ct = "=1.7.1"

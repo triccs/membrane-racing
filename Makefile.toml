@@ -1,5 +1,5 @@
 [env]
-DOCKER_IMAGE = "cosmwasm/workspace-optimizer:latest"
+DOCKER_IMAGE = "cosmwasm/workspace-optimizer:0.14.0"
 
 [tasks.rust-optimizer]
 description = "Run CosmWasm workspace optimizer Docker image over the workspace"
