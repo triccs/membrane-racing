@@ -6,7 +6,7 @@ use crate::error::TrainerError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{ADMIN, get_q_values, set_q_values, get_training_stats, increment_training_stats, get_track_results, update_track_results, get_training_session, save_training_session, remove_training_session};
 use racing::types::{RewardType, QUpdate};
-use racing::trainer::{TrackTrainingConfig, TrainingStrategy, TrainingSession, RewardConfig, TrainingConfig};
+use racing::trainer::{TrainingRequest, TrainingSession, RewardConfig, TrainingConfig, RewardTemplate};
 
 // Q-learning constants
 const ALPHA: f32 = 0.1; // Learning rate
@@ -288,12 +288,16 @@ pub fn execute_batch_update_q_values(
             return Err(TrainerError::InvalidAction { action: update.action as usize });
         }
 
+        // Convert hashes to hex strings for storage keys
+        let state_hex = hex::encode(update.state_hash);
+
         // Get current Q-values for this state
-        let mut q_values = get_q_values(deps.storage, &update.car_id, &update.state_hash).unwrap_or([0; 5]);
+        let mut q_values = get_q_values(deps.storage, &update.car_id, &state_hex).unwrap_or([0; 5]);
 
         // Get Q-values for next state
         let max_next_q = if let Some(next_hash) = &update.next_state_hash {
-            let next_q_values = get_q_values(deps.storage, &update.car_id, next_hash).unwrap_or([0; 5]);
+            let next_hex = hex::encode(next_hash);
+            let next_q_values = get_q_values(deps.storage, &update.car_id, &next_hex).unwrap_or([0; 5]);
             next_q_values.iter().max().cloned().unwrap_or(0)
         } else {
             0 // No next state
@@ -310,7 +314,7 @@ pub fn execute_batch_update_q_values(
         q_values[update.action as usize] = new_value.clamp(MIN_Q_VALUE, MAX_Q_VALUE);
 
         // Save updated Q-values
-        set_q_values(deps.storage, &update.car_id, &update.state_hash, q_values)?;
+        set_q_values(deps.storage, &update.car_id, &state_hex, q_values)?;
 
         // Update training statistics
         increment_training_stats(deps.storage, &update.car_id)?;
@@ -334,7 +338,7 @@ fn calculate_reward_from_config(
     match reward_config {
         RewardConfig::Template(template) => {
             match template {
-                racing::trainer::RewardTemplate::AntiStuck { forward_reward, stuck_penalty, exploration_bonus, anti_stuck_multiplier } => {
+                RewardTemplate::AntiStuck { forward_reward, stuck_penalty, exploration_bonus, anti_stuck_multiplier } => {
                     // Anti-stuck focused rewards
                     if step < total_steps / 3 {
                         RewardType::Distance(*forward_reward)
@@ -344,7 +348,7 @@ fn calculate_reward_from_config(
                         RewardType::Distance((*forward_reward as f32 * *anti_stuck_multiplier * 1.5) as i32)
                     }
                 },
-                racing::trainer::RewardTemplate::Speed { forward_reward, speed_bonus, slow_penalty, speed_multiplier } => {
+                RewardTemplate::Speed { forward_reward, speed_bonus, slow_penalty, speed_multiplier } => {
                     // Speed focused rewards
                     let base_reward = if step < total_steps / 2 {
                         *forward_reward
@@ -353,17 +357,17 @@ fn calculate_reward_from_config(
                     };
                     RewardType::Distance(base_reward + *speed_bonus)
                 },
-                racing::trainer::RewardTemplate::Conservative { forward_reward, risk_penalty, safety_bonus, conservative_multiplier } => {
+                RewardTemplate::Conservative { forward_reward, risk_penalty, safety_bonus, conservative_multiplier } => {
                     // Conservative rewards
                     let base_reward = (*forward_reward as f32 * *conservative_multiplier) as i32;
                     RewardType::Distance(base_reward + *safety_bonus)
                 },
-                racing::trainer::RewardTemplate::Aggressive { forward_reward, aggressive_bonus, conservative_penalty, aggressive_multiplier } => {
+                RewardTemplate::Aggressive { forward_reward, aggressive_bonus, conservative_penalty, aggressive_multiplier } => {
                     // Aggressive rewards
                     let base_reward = (*forward_reward as f32 * *aggressive_multiplier) as i32;
                     RewardType::Distance(base_reward + *aggressive_bonus)
                 },
-                racing::trainer::RewardTemplate::Balanced { forward_reward, exploration_bonus, stuck_penalty, balanced_multiplier } => {
+                RewardTemplate::Balanced { forward_reward, exploration_bonus, stuck_penalty, balanced_multiplier } => {
                     // Balanced rewards
                     let base_reward = (*forward_reward as f32 * *balanced_multiplier) as i32;
                     if step % 3 == 0 {

@@ -257,6 +257,9 @@ pub enum QueryMsg {
     /// Get available reward templates
     #[returns(GetRewardTemplatesResponse)]
     GetRewardTemplates {},
+    /// Get training configuration templates
+    #[returns(GetTrainingConfigTemplatesResponse)]
+    GetTrainingConfigTemplates {},
 }
 
 #[cw_serde]
@@ -352,4 +355,24 @@ pub struct RewardTemplateInfo {
     pub default_params: RewardTemplate,
     /// Recommended use cases
     pub recommended_use: Vec<String>,
+}
+
+/// Information about a training configuration template
+#[cw_serde]
+pub struct TrainingConfigTemplateInfo {
+    /// Name of the template
+    pub name: String,
+    /// Description of the template
+    pub description: String,
+    /// Default training configuration
+    pub default_config: TrainingConfig,
+    /// Recommended use cases
+    pub recommended_use: Vec<String>,
+}
+
+/// Response for available training configuration templates
+#[cw_serde]
+pub struct GetTrainingConfigTemplatesResponse {
+    /// List of available training configuration templates
+    pub templates: Vec<TrainingConfigTemplateInfo>,
 } 
