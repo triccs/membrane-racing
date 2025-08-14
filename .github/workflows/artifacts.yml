@@ -2,13 +2,9 @@ name: Artifacts
 
 on:
   push:
-    branches:
-      - master
-      - main
+    branches: [master, main]
   pull_request:
-    branches:
-      - master
-      - main
+    branches: [master, main]
   workflow_dispatch:
 
 env:
@@ -16,20 +12,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-
   artifacts:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (stable)
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.76.0
+          toolchain: stable
           override: true
 
-      - name: Install cargo make
+      - name: Show versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Install cargo-make
         uses: davidB/rust-cargo-make@v1
 
       - name: Compile contracts to wasm
