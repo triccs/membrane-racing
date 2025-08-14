@@ -1,0 +1,7 @@
+[env]
+DOCKER_IMAGE = "cosmwasm/workspace-optimizer:latest"
+
+[tasks.rust-optimizer]
+description = "Run CosmWasm workspace optimizer Docker image over the workspace"
+command = "bash"
+args = ["-lc", "set -euo pipefail; if ! command -v docker >/dev/null 2>&1; then echo 'Docker not found. Install Docker Desktop or run this in CI with Docker available.' >&2; exit 127; fi; docker run --rm -v \"${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}:/code\" --mount type=volume,source=optimizer_cache,target=/code/target --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry ${DOCKER_IMAGE}" ] 
