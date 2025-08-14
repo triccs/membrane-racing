@@ -7,10 +7,6 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
-env:
-  RUST_BACKTRACE: 1
-  CARGO_TERM_COLOR: always
-
 jobs:
   artifacts:
     runs-on: ubuntu-latest
@@ -18,22 +14,16 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain (stable)
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - name: Pull CosmWasm optimizer image
+        run: docker pull cosmwasm/workspace-optimizer:0.14.0
 
-      - name: Show versions
+      - name: Compile contracts to wasm (optimizer)
         run: |
-          rustc --version
-          cargo --version
-
-      - name: Install cargo-make
-        uses: davidB/rust-cargo-make@v1
-
-      - name: Compile contracts to wasm
-        run: cargo make rust-optimizer
+          docker run --rm \
+            -v "${{ github.workspace }}:/code" \
+            --mount type=volume,source=optimizer_cache,target=/code/target \
+            --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+            cosmwasm/workspace-optimizer:0.14.0
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
