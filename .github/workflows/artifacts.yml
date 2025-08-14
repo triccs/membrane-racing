@@ -14,19 +14,18 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      # Refresh Cargo.lock on the host before running the optimizer (which uses --locked)
-      - name: Install Rust (stable)
+      # Needed because the optimizer runs cargo with --locked
+      - name: Install Rust (stable) and refresh lockfile
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Generate/refresh lockfile
-        run: cargo generate-lockfile
+      - run: cargo generate-lockfile
 
       - name: Pull CosmWasm optimizer image
         run: docker pull cosmwasm/workspace-optimizer:0.14.0
 
-      - name: Compile contracts to wasm (optimizer)
+      - name: Compile contracts to wasm (optimizer, no bulk-memory)
         run: |
           docker run --rm \
+            -e RUSTFLAGS="-C target-feature=-bulk-memory" \
             -v "${{ github.workspace }}:/code" \
             --mount type=volume,source=optimizer_cache,target=/code/target \
             --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
