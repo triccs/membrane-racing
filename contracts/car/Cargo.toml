@@ -3,8 +3,23 @@ name = "car"
 version = "0.1.0"
 edition = "2021"
 
+exclude = [
+  # Those files are rust-optimizer artifacts. You might want to commit them for convenience but they should not be part of the source code publication.
+  "contract.wasm",
+  "hash.txt",
+]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+
+[features]
+# for more explicit tests, cargo test --features=backtraces
+backtraces = ["cosmwasm-std/backtraces"]
+# use library feature to disable all instantiate/execute/query exports
+library = []
 
 [profile.release]
 opt-level = 3
@@ -43,10 +58,6 @@ cw721-base = { version = "0.16.0", default-features = false, features = ["librar
 
 [dev-dependencies]
 cw-multi-test = "0.16.0"
-
-[[bin]]
-name = "schema"
-path = "schema.rs" 
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cosmwasm-schema = "1.5.11"
