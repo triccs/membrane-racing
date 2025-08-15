@@ -13,7 +13,6 @@ use crate::state::{CAR_ID_COUNTER, CONFIG, PENDING_OWNER};
 use racing::types::CarMetadata;
 use racing::car::Config;
 use racing::traits_engine::{default_rarity_table, generate_traits_with_rarity, traits_to_attributes};
-use racing::traits_engine::Decal;
 
 const CONTRACT_NAME: &str = "car_nft";
 const CONTRACT_VERSION: &str = "0.1.0";

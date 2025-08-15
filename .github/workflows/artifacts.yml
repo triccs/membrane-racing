@@ -2,61 +2,39 @@ name: Artifacts
 
 on:
   push:
-    branches: [master, main]
+    branches:
+      - master
+      - main
+      - oracle_pricing
   pull_request:
-    branches: [master, main]
+    branches:
+      - master
+      - main
   workflow_dispatch:
 
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
 jobs:
+
   artifacts:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
 
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install cargo make
+        uses: davidB/rust-cargo-make@v1
 
-      # Force rustc to NOT emit bulk-memory
-      - name: Ensure cargo config
-        run: |
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<'CFG'
-          [target.wasm32-unknown-unknown]
-          rustflags = ["-C", "target-feature=-bulk-memory"]
-          CFG
-          cat .cargo/config.toml
-
-      # Ensure lockfile exists for reproducible build
-      - name: Generate/refresh lockfile
-        run: cargo generate-lockfile
-
-      - name: Build all contracts to wasm
-        run: cargo build --release --target wasm32-unknown-unknown
-
-      - name: Install binaryen (wasm-opt)
-        run: sudo apt-get update && sudo apt-get install -y binaryen
-
-      # Optimize artifacts and allow bulk-memory in validator just in case
-      - name: Optimize wasm
-        run: |
-          mkdir -p artifacts
-          # Find produced wasm files
-          find target/wasm32-unknown-unknown/release -maxdepth 1 -type f -name '*.wasm' \
-            -exec sh -c '
-              for f do
-                out="artifacts/$(basename "$f")"
-                # Inspect for memory.copy/fill before/after, for debugging
-                echo "Optimizing $f -> $out"
-                strings "$f" | grep -E "memory\\.(copy|fill)" || true
-                wasm-opt -Oz --enable-bulk-memory -o "$out" "$f"
-                strings "$out" | grep -E "memory\\.(copy|fill)" || true
-              done
-            ' sh {} +
-          ls -lh artifacts
+      - name: Compile contracts to wasm
+        run: cargo make rust-optimizer
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
